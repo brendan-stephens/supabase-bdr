@@ -358,6 +358,60 @@ Because BDR keeps both nodes current, writes that land on Node B during the outa
 
 ---
 
+## Pros and cons of this architecture
+
+### Pros
+
+**Both nodes stay writable at all times**
+No promotion step on failover. When a node goes down, HAProxy re-routes and the peer accepts writes immediately — it's a routing decision, not a database operation.
+
+**Native PostgreSQL, no extra software**
+`origin = none` subscriptions are built into Postgres 16+. No Galera, no EDB BDR license, no Patroni. The replication stream is the same WAL machinery Supabase already uses internally.
+
+**Regional writes with low latency**
+Route users to their nearest node — us-east-1 user writes to Node A, eu-west-1 user writes to Node B. Each write commits locally with full ACID guarantees before replicating, so write latency is determined by the local datacenter, not the cross-region RTT.
+
+**Simple horizontal write distribution**
+Round-robin or HAProxy splits write load across two nodes. Each handles ~50% of writes under normal operation.
+
+---
+
+### Cons
+
+**Conflict resolution is silent and blunt**
+Last-write-wins by commit timestamp. If two users update the same row on different nodes within the replication lag window, one write is silently discarded — no merge, no notification, no error. For most workloads with disjoint keys (each user writes their own rows) this is fine. For shared state (inventory counts, account balances, counters) it is a serious problem.
+
+**Replication lag = consistency gap**
+There is always a window — milliseconds same-region, 50–200ms+ cross-region — where the nodes diverge. A user who writes to Node A and immediately reads from Node B may not see their write. Read-your-own-writes across nodes requires either routing reads to the write node or accepting stale reads.
+
+**DDL does not replicate**
+Schema changes (adding a column, changing a type, dropping an index) must be applied manually to both nodes in the correct order. The safe sequence is: add a nullable column to the subscriber first, then the publisher. Miss this and replication stops with a constraint error.
+
+**Replication slot disk risk**
+If a subscriber goes offline or falls behind, the publisher keeps accumulating WAL in the replication slot indefinitely — potentially filling the disk. Set `max_slot_wal_keep_size` and monitor slot lag actively.
+
+**Split-brain on network partition**
+If Node A and Node B lose connectivity, both continue accepting writes independently. When the partition heals, both sides apply what the other wrote — and any row updated on both sides resolves to last-write-wins silently. There is no way to detect or surface conflicts after the fact without application-level versioning.
+
+**This is DIY BDR, not enterprise BDR**
+Products like EDB Postgres Distributed add conflict detection, CRDT data types, DDL replication, and global sequences. What is built here is the subset that standard Postgres supports natively — powerful but limited.
+
+---
+
+### When this pattern fits well
+
+- **Same-region HA** — two nodes in the same region for redundancy. Replication lag is <10ms, conflict risk is low, failover is instant. This is the sweet spot.
+- **Read-heavy workloads** — route reads to either node, writes round-robin. Lag is tolerable if reads do not need strict consistency.
+- **Disjoint key spaces** — multi-tenant apps where each tenant's data only ever lives on one node. Conflicts are structurally impossible.
+
+### When it does not fit
+
+- **High-contention shared rows** — counters, inventory, balances. One correct write will be silently overwritten. Use a single authoritative node, optimistic locking, or a distributed transaction layer instead.
+- **Strict read-after-write consistency** — every read must reflect every write immediately. Use a single primary with replicas for reads.
+- **Frequent cross-region writes to overlapping keys** — the wider the replication lag, the higher the conflict probability. Cross-region BDR is viable only when writes to the same rows from different regions are rare by design.
+
+---
+
 ## How the replication loop is prevented
 
 PostgreSQL logical replication tracks the *origin* of each WAL record. When Node B applies a row replicated from Node A, that row is stamped with the replication origin `node_b_sub_a`. Node B's publication (`bdr_pub`) only broadcasts rows with *no* origin — i.e., rows written directly by an application. So the replicated row is never re-sent back to Node A, breaking the loop.
