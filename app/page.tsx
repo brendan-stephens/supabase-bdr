@@ -362,6 +362,7 @@ export default function Home() {
         <NodePanel
           label="Node A"
           dbRef={NODE_A_REF}
+          panelNode="node-a"
           items={itemsA}
           color="blue"
           peerItems={itemsB}
@@ -376,6 +377,7 @@ export default function Home() {
         <NodePanel
           label="Node B"
           dbRef={NODE_B_REF}
+          panelNode="node-b"
           items={itemsB}
           color="green"
           peerItems={itemsA}
@@ -417,6 +419,7 @@ function NodeBadge({ node }: { node: string }) {
 type NodePanelProps = {
   label: string
   dbRef: string
+  panelNode: 'node-a' | 'node-b'
   items: TrackedItem[]
   color: 'blue' | 'green'
   peerItems: TrackedItem[]
@@ -432,6 +435,7 @@ type NodePanelProps = {
 function NodePanel({
   label,
   dbRef,
+  panelNode,
   items,
   color,
   peerItems,
@@ -476,6 +480,7 @@ function NodePanel({
             <ItemRow
               key={item.id}
               item={item}
+              panelNode={panelNode}
               isOnPeer={peerIds.has(item.id)}
               isEditing={editingId === item.id}
               isSaving={savingId === item.id}
@@ -494,6 +499,7 @@ function NodePanel({
 
 type ItemRowProps = {
   item: TrackedItem
+  panelNode: 'node-a' | 'node-b'
   isOnPeer: boolean
   isEditing: boolean
   isSaving: boolean
@@ -506,6 +512,7 @@ type ItemRowProps = {
 
 function ItemRow({
   item,
+  panelNode,
   isOnPeer,
   isEditing,
   isSaving,
@@ -515,7 +522,11 @@ function ItemRow({
   onEditSave,
   onEditCancel,
 }: ItemRowProps) {
-  const lagMs = item.syncedAt ? item.syncedAt - item.receivedAt : null
+  // Only the panel that originally wrote this item shows the replication lag.
+  // The peer panel shows "synced" without a number — the lag is already
+  // visible on the source side, and 0ms on the peer is misleading.
+  const isSourcePanel = item.source_node === panelNode
+  const lagMs = isSourcePanel && item.syncedAt ? item.syncedAt - item.receivedAt : null
 
   if (isEditing) {
     return (
@@ -580,7 +591,7 @@ function ItemRow({
       ) : (
         <span className="shrink-0 text-xs text-yellow-500 flex items-center gap-1 animate-pulse">
           <span>⟳</span>
-          <span>pending</span>
+          <span>{isSourcePanel ? 'replicating…' : 'pending'}</span>
         </span>
       )}
     </div>
