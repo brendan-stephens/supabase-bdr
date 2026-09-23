@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>supabase-bdr — bidirectional replication across two Supabase projects</title>
+<meta name="description" content="Round-robin writes across two Supabase projects with PostgreSQL bidirectional logical replication and a live sync-status dashboard." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #121212;
+    --bg-surface: #181818;
+    --bg-raised: #1e1e1e;
+    --bg-control: #232323;
+    --green: #3ecf8e;
+    --green-dark: #24b47e;
+    --green-glow: rgba(62, 207, 142, 0.13);
+    --blue: #6e9ef5;
+    --blue-dim: #4a7ce8;
+    --blue-glow: rgba(110, 158, 245, 0.13);
+    --fg: #fafafa;
+    --fg-dim: #b4b4b4;
+    --fg-muted: #8a8a8a;
+    --fg-faint: #565656;
+    --border: #262626;
+    --border-strong: #383838;
+    --danger: #e5675d;
+    --font-display: 'Fraunces', Georgia, serif;
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', Menlo, monospace;
+    --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --maxw: 1080px;
+  }
+  html { color-scheme: dark; scroll-behavior: smooth; overflow-x: clip; }
+  body { font-family: var(--font-sans); background: var(--bg); color: var(--fg); line-height: 1.6; font-size: 16px; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  a { color: var(--green); text-decoration: none; }
+  a:hover { color: var(--green-dark); }
+  ::selection { background: rgba(110, 158, 245, 0.25); }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 28px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--blue); }
+  .display { font-family: var(--font-display); font-weight: 500; letter-spacing: -0.015em; line-height: 1.06; }
+
+  /* nav */
+  nav { position: sticky; top: 0; z-index: 50; background: rgba(18,18,18,0.72); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 9px; font-family: var(--font-mono); font-weight: 500; font-size: 15px; color: var(--fg); }
+  .brand:hover { color: var(--fg); }
+  .nav-links { display: flex; align-items: center; gap: 26px; }
+  .nav-links a { color: var(--fg-dim); font-size: 14px; }
+  .nav-links a:hover { color: var(--fg); }
+  .nav-gh { display: inline-flex; align-items: center; gap: 7px; color: var(--fg) !important; padding: 7px 13px; border: 1px solid var(--border-strong); border-radius: 7px; }
+  .nav-gh:hover { border-color: var(--green); }
+  .nav-gh svg { width: 15px; height: 15px; fill: currentColor; }
+  @media (max-width: 720px) { .nav-links a:not(.nav-gh) { display: none; } }
+
+  /* hero */
+  .hero { position: relative; padding: 104px 0 76px; overflow: hidden; }
+  .hero-spot { position: absolute; top: -200px; left: 50%; transform: translateX(-50%); width: 1100px; height: 640px; background: radial-gradient(ellipse at center, var(--blue-glow) 0%, transparent 65%); pointer-events: none; z-index: 0; }
+  .hero .wrap { position: relative; z-index: 1; }
+  .hero h1 { font-size: clamp(44px, 8vw, 88px); margin: 20px 0 0; }
+  .hero h1 .accent { color: var(--blue); }
+  .hero h1 .accent-g { color: var(--green); }
+  .hero .sub { font-size: clamp(17px, 2.4vw, 21px); color: var(--fg-dim); max-width: 640px; margin: 24px 0 0; }
+  .hero .cta { display: flex; gap: 14px; margin-top: 36px; flex-wrap: wrap; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; padding: 12px 20px; border-radius: 8px; border: 1px solid transparent; transition: all .15s var(--ease); }
+  .btn-primary { background: var(--green); color: #06251a !important; }
+  .btn-primary:hover { background: var(--green-dark); color: #06251a !important; }
+  .btn-ghost { border-color: var(--border-strong); color: var(--fg) !important; }
+  .btn-ghost:hover { border-color: var(--blue); }
+
+  /* sections */
+  section { padding: 72px 0; border-top: 1px solid var(--border); }
+  .sec-head { max-width: 680px; margin-bottom: 44px; }
+  .sec-head h2 { font-size: clamp(28px, 4.5vw, 42px); margin: 12px 0 0; }
+  .sec-head p { color: var(--fg-dim); margin-top: 16px; font-size: 17px; }
+  .lead { color: var(--blue); }
+
+  /* cols + cards */
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 760px) { .cols { grid-template-columns: 1fr; } }
+  .card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; padding: 26px; }
+  .card h3 { font-family: var(--font-display); font-weight: 500; font-size: 23px; margin-bottom: 6px; display: flex; align-items: center; gap: 10px; }
+  .tag { font-family: var(--font-mono); font-size: 11px; padding: 3px 9px; border-radius: 999px; font-weight: 500; }
+  .tag.a { background: rgba(110,158,245,.16); color: #9db4ff; }
+  .tag.b { background: var(--green-glow); color: var(--green); }
+  .card .desc { color: var(--fg-dim); font-size: 15px; margin-bottom: 18px; }
+  .card ul { list-style: none; display: flex; flex-direction: column; gap: 9px; }
+  .card li { display: flex; gap: 10px; font-size: 14px; color: var(--fg-dim); }
+  .card li b { color: var(--fg); font-weight: 600; }
+  .card li .mk { color: var(--blue); flex-shrink: 0; }
+  .card li .mk.g { color: var(--green); }
+
+  /* architecture diagram */
+  .arch { margin-top: 40px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; padding: 30px 30px 24px; font-family: var(--font-mono); font-size: 13px; }
+  .arch-row { display: flex; align-items: center; gap: 0; }
+  .arch-node { flex: 1; background: var(--bg-control); border: 1px solid var(--border-strong); border-radius: 10px; padding: 16px 20px; }
+  .arch-node.a { border-color: rgba(110,158,245,.4); }
+  .arch-node.b { border-color: rgba(62,207,142,.4); }
+  .arch-node .label { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--fg-muted); margin-bottom: 6px; }
+  .arch-node .name { color: var(--fg); font-size: 14px; font-weight: 500; }
+  .arch-node.a .name { color: #9db4ff; }
+  .arch-node.b .name { color: var(--green); }
+  .arch-node .sub { color: var(--fg-muted); font-size: 11px; margin-top: 4px; }
+  .arch-mid { flex: 0 0 auto; padding: 0 12px; text-align: center; }
+  .arch-arrow { color: var(--fg-faint); font-size: 20px; display: block; }
+  .arch-label { font-size: 10px; color: var(--fg-muted); display: block; margin-top: 4px; white-space: nowrap; }
+  .arch-details { margin-top: 20px; border-top: 1px dashed var(--border); padding-top: 18px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .arch-detail { font-size: 12px; color: var(--fg-muted); }
+  .arch-detail .k { color: var(--blue); display: block; margin-bottom: 3px; }
+  @media (max-width: 640px) { .arch-row { flex-direction: column; } .arch-mid { padding: 12px 0; } .arch-details { grid-template-columns: 1fr 1fr; } }
+
+  /* stats */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .stats { grid-template-columns: 1fr 1fr; } }
+  .stat { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+  .stat .n { font-family: var(--font-display); font-size: 40px; font-weight: 600; color: var(--blue); line-height: 1; }
+  .stat .n.g { color: var(--green); }
+  .stat .l { font-size: 13px; color: var(--fg-dim); margin-top: 10px; }
+
+  /* callout */
+  .callout { background: linear-gradient(180deg, var(--bg-surface), var(--bg)); border: 1px solid var(--border-strong); border-left: 3px solid var(--blue); border-radius: 12px; padding: 24px 26px; margin-top: 28px; }
+  .callout h4 { font-family: var(--font-display); font-weight: 500; font-size: 20px; margin-bottom: 8px; }
+  .callout p { color: var(--fg-dim); font-size: 15px; }
+
+  /* code */
+  pre { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 22px; overflow-x: auto; font-family: var(--font-mono); font-size: 13.5px; line-height: 1.7; color: var(--fg-dim); }
+  pre .c { color: var(--fg-faint); }
+  pre .k { color: var(--blue); }
+  pre .g { color: var(--green); }
+  pre .label { color: var(--fg-muted); }
+  code.inline { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-control); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; color: var(--green); }
+
+  /* feature grid */
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 8px; }
+  @media (max-width: 760px) { .features { grid-template-columns: 1fr 1fr; } }
+  .feature { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .feature .icon { font-size: 22px; margin-bottom: 10px; }
+  .feature h4 { font-size: 15px; font-weight: 600; margin-bottom: 6px; }
+  .feature p { font-size: 13.5px; color: var(--fg-dim); }
+
+  /* haproxy diagram */
+  .hap { margin-top: 32px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 14px; padding: 28px; font-family: var(--font-mono); font-size: 13px; color: var(--fg-dim); line-height: 1.9; }
+  .hap .hl { color: var(--green); }
+  .hap .hb { color: var(--blue); }
+
+  /* takeaways */
+  .takes { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 760px) { .takes { grid-template-columns: 1fr; } }
+  .take { display: flex; gap: 16px; padding: 20px; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px; }
+  .take .num { font-family: var(--font-display); font-size: 24px; color: var(--blue); font-weight: 600; line-height: 1.2; flex-shrink: 0; }
+  .take p { font-size: 14.5px; color: var(--fg-dim); }
+  .take p b { color: var(--fg); }
+
+  /* table */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  thead th { text-align: left; font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-muted); padding: 0 14px 12px; font-weight: 500; }
+  tbody td { padding: 12px 14px; border-top: 1px solid var(--border); }
+  tbody tr:hover { background: var(--bg-surface); }
+  td .mono { font-family: var(--font-mono); }
+  td .na { color: #9db4ff; }
+  td .nb { color: var(--green); }
+
+  footer { border-top: 1px solid var(--border); padding: 40px 0 60px; color: var(--fg-muted); font-size: 13px; }
+  footer .wrap { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <a href="#top" class="brand">
+      <span style="font-size:17px">⇄</span> supabase-bdr
+    </a>
+    <div class="nav-links">
+      <a href="#how">How it works</a>
+      <a href="#app">The app</a>
+      <a href="#haproxy">HAProxy</a>
+      <a href="#run">Run it</a>
+      <a class="nav-gh" href="https://github.com/brendan-stephens/supabase-bdr" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<div id="top" class="hero">
+  <div class="hero-spot"></div>
+  <div class="wrap">
+    <div class="eyebrow">PostgreSQL · Logical Replication · Supabase</div>
+    <h1 class="display">Two databases.<br /><span class="accent">Always</span> in <span class="accent-g">sync</span>.</h1>
+    <p class="sub">Round-robin writes across two independent Supabase projects, wired together with PostgreSQL bidirectional logical replication. Both nodes stay fully writable — no primary, no replica, no promotion on failover.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="#how">How it works ↓</a>
+      <a class="btn btn-ghost" href="https://github.com/brendan-stephens/supabase-bdr" target="_blank" rel="noopener">Read the code</a>
+    </div>
+  </div>
+</div>
+
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">PostgreSQL WAL-level replication</div>
+      <h2 class="display">Changes flow at the database level.</h2>
+      <p>Each node publishes its local writes via a <span class="lead">logical publication</span>. The other node subscribes with <code class="inline">origin = none</code> — so only rows written directly on the publisher are forwarded. Replicated rows are never re-published. No loops. No application glue required.</p>
+    </div>
+
+    <div class="arch">
+      <div class="arch-row">
+        <div class="arch-node a">
+          <div class="label">Node A</div>
+          <div class="name">bdr-node-a</div>
+          <div class="sub">publishes: bdr_pub<br/>subscribes: node_a_sub_b</div>
+        </div>
+        <div class="arch-mid">
+          <span class="arch-arrow">⇄</span>
+          <span class="arch-label">WAL-level<br/>replication</span>
+        </div>
+        <div class="arch-node b">
+          <div class="label">Node B</div>
+          <div class="name">bdr-node-b</div>
+          <div class="sub">publishes: bdr_pub<br/>subscribes: node_b_sub_a</div>
+        </div>
+      </div>
+      <div class="arch-details">
+        <div class="arch-detail"><span class="k">publication</span>FOR TABLE items — broadcasts direct writes only</div>
+        <div class="arch-detail"><span class="k">subscription</span>origin = none — ignores replicated rows</div>
+        <div class="arch-detail"><span class="k">result</span>changes propagate once, in one direction, without looping</div>
+      </div>
+    </div>
+
+    <div class="callout" style="margin-top:32px">
+      <h4>Why <code class="inline">origin = none</code> breaks the loop.</h4>
+      <p>PostgreSQL's WAL tracks the <em>origin</em> of every record. When Node B applies a row replicated from Node A, that row is stamped with the subscription origin. Node B's publication only broadcasts rows with <em>no</em> origin — rows written directly by an application. The replicated row is invisible to the publisher, so it is never sent back to Node A.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Both nodes, always writable</div>
+      <h2 class="display">No primary. No replica. No promotion.</h2>
+      <p>Traditional primary/replica setups leave one node read-only until a failover promotion completes. BDR removes that constraint entirely.</p>
+    </div>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="n">2</div>
+        <div class="l">fully writable Supabase projects — reads and writes accepted on either node at all times</div>
+      </div>
+      <div class="stat">
+        <div class="n g">&lt;100ms</div>
+        <div class="l">typical replication lag on same-region nodes — inserts appear on the peer within milliseconds</div>
+      </div>
+      <div class="stat">
+        <div class="n">0</div>
+        <div class="l">downtime on node failure with HAProxy active/passive — failover is instant, no promotion needed</div>
+      </div>
+      <div class="stat">
+        <div class="n g">∞</div>
+        <div class="l">replication loops prevented by <code class="inline">origin&nbsp;=&nbsp;none</code> — a single SQL option, no trigger glue</div>
+      </div>
+    </div>
+
+    <table style="margin-top:36px">
+      <thead>
+        <tr><th></th><th>Traditional primary/replica</th><th>BDR (this setup)</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Both nodes writable?</td><td class="mono" style="color:var(--danger)">✗ replica is read-only</td><td class="mono nb">✓ always</td></tr>
+        <tr><td>Failover requires promotion?</td><td class="mono" style="color:var(--danger)">✗ seconds to minutes</td><td class="mono nb">✓ instant</td></tr>
+        <tr><td>Data loss risk on failover?</td><td class="mono" style="color:var(--fg-muted)">possible (replication lag)</td><td class="mono nb">minimal (&lt;100ms)</td></tr>
+        <tr><td>HAProxy instant switchover?</td><td class="mono" style="color:var(--danger)">✗ must wait for promotion</td><td class="mono nb">✓</td></tr>
+        <tr><td>Conflict resolution</td><td class="mono" style="color:var(--fg-muted)">N/A</td><td class="mono" style="color:var(--fg-dim)">last-write-wins by commit ts</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="app">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Next.js · Supabase Realtime · Round-robin</div>
+      <h2 class="display">A dashboard that makes replication visible.</h2>
+      <p>Write a record, watch it appear on the other node in real time. The sync lag in milliseconds is shown next to every row — measured from the moment the Realtime INSERT event fires on the source node to when it appears on the peer.</p>
+    </div>
+
+    <div class="features">
+      <div class="feature">
+        <div class="icon">⇄</div>
+        <h4>Round-robin writes</h4>
+        <p>Each submission alternates between Node A and Node B. The server maintains the counter — concurrent callers race to increment it.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">⚡</div>
+        <h4>Batch test mode</h4>
+        <p>Fires 2.5 inserts/sec continuously, saturating both nodes. Watch hundreds of rows replicate in real time and the "pending" badges clear.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">✎</div>
+        <h4>Inline editing</h4>
+        <p>Click any row to edit it. The UPDATE goes to the source node; BDR propagates it to the peer automatically via the same WAL replication stream.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">✓</div>
+        <h4>Live sync status</h4>
+        <p>Every row shows <strong>✓ Xms</strong> once it's confirmed on both nodes, or <strong>⟳ pending</strong> while replication is in flight.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">↺</div>
+        <h4>Reset / truncate</h4>
+        <p>Two-click reset clears both nodes simultaneously and wipes local state — handy for repeatable demos without touching the database manually.</p>
+      </div>
+      <div class="feature">
+        <div class="icon">🔌</div>
+        <h4>HTTP API</h4>
+        <p><code class="inline">POST /api/write</code> exposes the round-robin logic externally. Script two concurrent inserters against it to stress-test replication.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="haproxy">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Live failover · zero promotion</div>
+      <h2 class="display">HAProxy in front. Instant switchover.</h2>
+      <p>Because both nodes are always writable and always current, HAProxy's health check is the only thing standing between an outage and continued service. When Node A fails its checks, traffic moves to Node B — which is already accepting writes.</p>
+    </div>
+
+    <div class="cols">
+      <div class="card">
+        <h3>Active / Passive <span class="tag a">failover</span></h3>
+        <div class="desc">All traffic hits Node A. Node B takes over only on failure.</div>
+        <ul>
+          <li><span class="mk g">✓</span><span>Deterministic routing — easier to reason about</span></li>
+          <li><span class="mk g">✓</span><span>No cross-node conflict risk</span></li>
+          <li><span class="mk">›</span><span>Node B is idle until needed — wasted capacity</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Active / Active <span class="tag b">load balanced</span></h3>
+        <div class="desc">Traffic round-robins across both nodes. Either failure halves capacity.</div>
+        <ul>
+          <li><span class="mk g">✓</span><span>Both nodes serve traffic — full utilization</span></li>
+          <li><span class="mk g">✓</span><span>Matches what the app's write API already does</span></li>
+          <li><span class="mk">›</span><span>Simultaneous writes to the same row → last-write-wins</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="hap">
+<span class="c"># Active/passive — balance first + backup flag</span>
+backend supabase_nodes
+    balance    <span class="hl">first</span>
+    option     httpchk GET /rest/v1/items?limit=1
+    http-check expect status 200
+
+    server <span class="hb">node-a</span>  &lt;ref-a&gt;.supabase.co:443  ssl verify none  check inter 2s fall 3 rise 2  weight 100
+    server <span class="hl">node-b</span>  &lt;ref-b&gt;.supabase.co:443  ssl verify none  check inter 2s fall 3 rise 2  <span class="hl">backup</span>
+
+<span class="c"># Active/active — swap balance and drop backup</span>
+backend supabase_nodes
+    balance    <span class="hl">roundrobin</span>
+    ...
+    server <span class="hb">node-a</span>  &lt;ref-a&gt;.supabase.co:443  ssl verify none  check inter 2s fall 3 rise 2
+    server <span class="hl">node-b</span>  &lt;ref-b&gt;.supabase.co:443  ssl verify none  check inter 2s fall 3 rise 2</div>
+
+    <div class="callout" style="margin-top:28px">
+      <h4>BDR means writes that land on Node B during an outage are not lost.</h4>
+      <p>When Node A recovers, its subscription to Node B resumes from the replication slot's last confirmed LSN. Any writes Node B accepted during the outage replicate back automatically — no manual sync, no reconciliation.</p>
+    </div>
+  </div>
+</section>
+
+<section id="run">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="eyebrow">Up in five minutes</div>
+      <h2 class="display">Run it yourself.</h2>
+      <p>Two Supabase projects, four SQL files, one Next.js app. The SQL sets up the schema, a dedicated replication user, publications, and subscriptions. The app runs against your credentials from <code class="inline">.env.local</code>.</p>
+    </div>
+
+    <pre><span class="c"># 1. Clone and install</span>
+<span class="g">git</span> clone https://github.com/brendan-stephens/supabase-bdr
+<span class="k">cd</span> supabase-bdr
+<span class="g">npm</span> install
+
+<span class="c"># 2. Create two Supabase projects, then run sql/ in order on each</span>
+<span class="label">#    01_schema.sql          — both nodes</span>
+<span class="label">#    02_replication_user.sql — both nodes</span>
+<span class="label">#    03_publications.sql     — both nodes</span>
+<span class="label">#    04_subscriptions.sql    — node-specific (see comments in file)</span>
+
+<span class="c"># 3. Configure credentials</span>
+<span class="g">cp</span> .env.example .env.local
+<span class="label">#    fill in NODE_A_URL, NODE_A_ANON_KEY, NODE_B_URL, NODE_B_ANON_KEY</span>
+
+<span class="c"># 4. Run</span>
+<span class="g">npm</span> run dev                 <span class="c"># http://localhost:3000</span></pre>
+
+    <pre style="margin-top:18px"><span class="c"># Script two concurrent inserters against the HTTP API</span>
+inserter() {
+  <span class="k">local</span> name=$1; <span class="k">local</span> n=0
+  <span class="k">while true</span>; <span class="k">do</span>
+    curl -s -X POST http://localhost:3000/api/write \
+      -H <span class="g">"Content-Type: application/json"</span> \
+      -d <span class="g">"{\"content\": \"$name #$((++n))\"}"</span> \
+    | jq -r <span class="g">'"[\(.writtenTo)] \(.item.content)"'</span>
+    sleep 0.5
+  <span class="k">done</span>
+}
+inserter <span class="g">"alice"</span> &amp;
+inserter <span class="g">"bob"</span> &amp;
+<span class="k">wait</span>   <span class="c"># Ctrl-C to stop</span></pre>
+
+    <div class="takes" style="margin-top:36px">
+      <div class="take"><div class="num">1</div><p><b><code class="inline">origin = none</code> is the only loop guard you need.</b> PostgreSQL's built-in WAL origin tracking handles it — no triggers, no application logic, no extra columns.</p></div>
+      <div class="take"><div class="num">2</div><p><b>Both nodes are writable from the moment the subscriptions are created.</b> There is no standby to promote. Failover is a routing decision, not a database operation.</p></div>
+      <div class="take"><div class="num">3</div><p><b>Replication lag is a function of network RTT.</b> Same-region projects replicate in tens of milliseconds. Cross-region adds RTT but both nodes remain writable throughout.</p></div>
+      <div class="take"><div class="num">4</div><p><b>Conflicts default to last-write-wins.</b> For most workloads with round-robin routing, conflicts are rare. For high-contention rows, add application-level versioning or use a dedicated BDR solution.</p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div>⇄ supabase-bdr — bidirectional replication across two Supabase projects.</div>
+    <div><a href="https://github.com/brendan-stephens/supabase-bdr" target="_blank" rel="noopener">github.com/brendan-stephens/supabase-bdr</a></div>
+  </div>
+</footer>
+
+</body>
+</html>
