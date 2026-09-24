@@ -192,7 +192,7 @@
   <div class="wrap">
     <div class="eyebrow">PostgreSQL · Logical Replication · Supabase</div>
     <h1 class="display">Two databases.<br /><span class="accent">Always</span> in <span class="accent-g">sync</span>.</h1>
-    <p class="sub">Round-robin writes across two independent Supabase projects, wired together with PostgreSQL bidirectional logical replication. Both nodes stay fully writable — no primary, no replica, no promotion on failover.</p>
+    <p class="sub">Round-robin writes across two independent Supabase projects, wired together with PostgreSQL bidirectional logical replication. Both nodes stay fully writable — no promotion on failover.</p>
     <div class="cta">
       <a class="btn btn-primary" href="#how">How it works ↓</a>
       <a class="btn btn-ghost" href="https://github.com/brendan-stephens/supabase-bdr" target="_blank" rel="noopener">Read the code</a>
@@ -243,7 +243,7 @@
   <div class="wrap">
     <div class="sec-head">
       <div class="eyebrow">Both nodes, always writable</div>
-      <h2 class="display">No primary. No replica. No promotion.</h2>
+      <h2 class="display">No promotion.</h2>
       <p>Traditional primary/replica setups leave one node read-only until a failover promotion completes. BDR removes that constraint entirely.</p>
     </div>
 
@@ -258,7 +258,7 @@
       </div>
       <div class="stat">
         <div class="n">0</div>
-        <div class="l">downtime on node failure with HAProxy active/passive — failover is instant, no promotion needed</div>
+        <div class="l">downtime on node failure — no promotion needed, the peer is already writable</div>
       </div>
       <div class="stat">
         <div class="n g">∞</div>
